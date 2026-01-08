@@ -4,7 +4,7 @@
 
 A Model Context Protocol (MCP) plugin that allows Claude Desktop and other AI tools (GitHub Copilot, Cursor, etc.) to interact directly with Figma, enabling powerful AI-assisted design capabilities.
 
-> **Important**: This project is based on [cursor-talk-to-figma-mcp](https://github.com/sonnylazuardi/cursor-talk-to-figma-mcp) by Sonny Lazuardi. It has been adapted to work with Claude Desktop and expanded with additional tools. Original credit belongs to Sonny Lazuardi ❤️
+> **Credits**: This is an enhanced fork of [claude-talk-to-figma-mcp](https://github.com/arinspunk/claude-talk-to-figma-mcp) by [arinspunk](https://github.com/arinspunk), which was originally based on [cursor-talk-to-figma-mcp](https://github.com/sonnylazuardi/cursor-talk-to-figma-mcp) by [Sonny Lazuardi](https://github.com/sonnylazuardi). Maintained by [beomsuKoh](https://github.com/GoBeromsu) with additional tools and improvements.
 
 ## ⚡ Installation
 
@@ -13,7 +13,7 @@ A Model Context Protocol (MCP) plugin that allows Claude Desktop and other AI to
 
 ### 2. Setup
 ```bash
-git clone https://github.com/arinspunk/claude-talk-to-figma-mcp.git
+git clone https://github.com/GoBeromsu/claude-talk-to-figma-mcp.git
 cd claude-talk-to-figma-mcp
 bun install
 ```
@@ -23,7 +23,7 @@ bun install
 ### 3. AI client configuration
 
 #### Option 1: DXT Package (Claude Desktop only)
-1. **Download**: Get the latest `claude-talk-to-figma-mcp.dxt` from [releases](https://github.com/arinspunk/claude-talk-to-figma-mcp/releases)
+1. **Download**: Get the latest `claude-talk-to-figma-mcp.dxt` from [releases](https://github.com/GoBeromsu/claude-talk-to-figma-mcp/releases)
 2. **Install**: Double-click the `.dxt` file → Claude Desktop installs automatically
 
 #### Option 2: JSON (Claude Desktop or Cursor)
