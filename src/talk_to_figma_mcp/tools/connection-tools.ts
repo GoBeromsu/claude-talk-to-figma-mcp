@@ -18,7 +18,7 @@ export function registerConnectionTools(server: McpServer): void {
   // Auto Connect Tool - automatically finds and connects to Figma
   server.tool(
     "auto_connect",
-    "Automatically connect to Figma. Finds available Figma plugin and connects without needing channel ID.",
+    "Connect to Figma automatically. No parameters required. Call this tool first before using any other Figma tools. It will find and connect to the running Figma plugin.",
     {},
     async () => {
       try {
@@ -128,9 +128,9 @@ export function registerConnectionTools(server: McpServer): void {
   // Manual Join Channel Tool (for cases with multiple channels)
   server.tool(
     "join_channel",
-    "Manually join a specific Figma channel. Use this when multiple Figma plugins are running.",
+    "Manually join a specific Figma channel by ID. Only use this when auto_connect reports multiple channels available. Requires channel ID parameter.",
     {
-      channel: z.string().describe("The channel ID to join"),
+      channel: z.string().describe("The channel ID to join (shown in Figma plugin or from get_connection_status)"),
     },
     async ({ channel }) => {
       try {

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "ClaudeTalkToFigma": {
+      "type": "stdio",
+      "command": "bun",
+      "args": [
+        "run",
+        "/Users/beomsu/Documents/GitHub/claude-talk-to-figma-mcp/dist/talk_to_figma_mcp/server.js"
+      ],
+      "env": {}
+    }
+  }
+}
