@@ -203,6 +203,8 @@ async function handleCommand(command, params) {
       return await getPages();
     case "set_current_page":
       return await setCurrentPage(params);
+    case "rename_node":
+      return await renameNode(params);
     default:
       throw new Error(`Unknown command: ${command}`);
   }
@@ -3593,5 +3595,37 @@ async function setCurrentPage(params) {
   return {
     id: page.id,
     name: page.name
+  };
+}
+
+// Rename a node (frame, component, group, etc.)
+async function renameNode(params) {
+  const { nodeId, name } = params || {};
+
+  if (!nodeId) {
+    throw new Error("Missing nodeId parameter");
+  }
+
+  if (!name) {
+    throw new Error("Missing name parameter");
+  }
+
+  const node = await figma.getNodeByIdAsync(nodeId);
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  if (node.type === "DOCUMENT") {
+    throw new Error("Cannot rename the document node");
+  }
+
+  const oldName = node.name;
+  node.name = name;
+
+  return {
+    id: node.id,
+    name: node.name,
+    oldName: oldName,
+    type: node.type
   };
 }
