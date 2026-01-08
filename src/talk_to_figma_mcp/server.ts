@@ -14,7 +14,7 @@ import { SERVER_CONFIG } from "./config/config";
 
 // Import utilities
 import { logger } from "./utils/logger";
-import { connectToFigma } from "./utils/websocket";
+import { initializeWebSocket } from "./utils/websocket";
 
 // Import tools registration function from tools/index.ts
 import { registerTools } from "./tools";
@@ -36,12 +36,13 @@ async function main() {
     // Register all prompts with the server
     registerPrompts(server);
     
-    // Try to connect to Figma socket server
+    // Initialize integrated WebSocket server (no separate bun socket needed!)
     try {
-      connectToFigma();
+      initializeWebSocket();
+      logger.info('WebSocket server started on port 3055');
     } catch (error) {
-      logger.warn(`Could not connect to Figma initially: ${error instanceof Error ? error.message : String(error)}`);
-      logger.warn('Will try to connect when the first command is sent');
+      logger.warn(`Could not initialize WebSocket server: ${error instanceof Error ? error.message : String(error)}`);
+      logger.warn('Figma connection may not work properly');
     }
 
     // Start the MCP server with stdio transport

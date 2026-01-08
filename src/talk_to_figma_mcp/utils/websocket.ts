@@ -3,13 +3,37 @@ import { v4 as uuidv4 } from "uuid";
 import { logger } from "./logger";
 import { serverUrl, defaultPort, WS_URL, reconnectInterval } from "../config/config";
 import { FigmaCommand, FigmaResponse, CommandProgressUpdate, PendingRequest, ProgressMessage } from "../types";
+import {
+  startWebSocketServer,
+  stopWebSocketServer,
+  getActiveChannels,
+  getCurrentChannel as getServerCurrentChannel,
+  setCurrentChannel as setServerCurrentChannel,
+  isServerRunning,
+  getServerStats,
+  getChannelClientCount
+} from "./websocket-server";
 
 // WebSocket connection and request tracking
 let ws: WebSocket | null = null;
 let currentChannel: string | null = null;
+let autoConnectEnabled: boolean = true;
 
 // Map of pending requests for promise tracking
 const pendingRequests = new Map<string, PendingRequest>();
+
+/**
+ * Initialize the integrated WebSocket server and client
+ */
+export function initializeWebSocket(port: number = defaultPort): void {
+  // Start the WebSocket server
+  const server = startWebSocketServer(port);
+  if (server) {
+    logger.info("Integrated WebSocket server started");
+    // Connect as a client to our own server
+    connectToFigma(port);
+  }
+}
 
 /**
  * Connects to the Figma server via WebSocket.
@@ -34,25 +58,29 @@ export function connectToFigma(port: number = defaultPort) {
     ws = null;
   }
 
-  const wsUrl = serverUrl === 'localhost' ? `${WS_URL}:${port}` : WS_URL;
-  logger.info(`Connecting to Figma socket server at ${wsUrl}...`);
-  
+  const wsUrl = `ws://localhost:${port}`;
+  logger.info(`Connecting to WebSocket server at ${wsUrl}...`);
+
   try {
     ws = new WebSocket(wsUrl);
-    
+
     // Add connection timeout
     const connectionTimeout = setTimeout(() => {
       if (ws && ws.readyState === WebSocket.CONNECTING) {
-        logger.error('Connection to Figma timed out');
+        logger.error('Connection timed out');
         ws.terminate();
       }
-    }, 10000); // 10 second connection timeout
-    
+    }, 10000);
+
     ws.on('open', () => {
       clearTimeout(connectionTimeout);
-      logger.info('Connected to Figma socket server');
-      // Reset channel on new connection
+      logger.info('Connected to WebSocket server');
       currentChannel = null;
+
+      // Auto-connect to available channel if enabled
+      if (autoConnectEnabled) {
+        setTimeout(() => tryAutoConnect(), 1000);
+      }
     });
 
     ws.on("message", (data: any) => {
@@ -66,34 +94,18 @@ export function connectToFigma(port: number = defaultPort) {
 
           if (requestId && pendingRequests.has(requestId)) {
             const request = pendingRequests.get(requestId)!;
-
-            // Update last activity timestamp
             request.lastActivity = Date.now();
-
-            // Reset the timeout to prevent timeouts during long-running operations
             clearTimeout(request.timeout);
 
-            // Create a new timeout with extended time for long operations
             request.timeout = setTimeout(() => {
               if (pendingRequests.has(requestId)) {
-                logger.error(`Request ${requestId} timed out after extended period of inactivity`);
+                logger.error(`Request ${requestId} timed out`);
                 pendingRequests.delete(requestId);
                 request.reject(new Error('Request to Figma timed out'));
               }
-            }, 120000); // 120 second timeout for inactivity during progress updates
+            }, 120000);
 
-            // Log progress
-            logger.info(`Progress update for ${progressData.commandType}: ${progressData.progress}% - ${progressData.message}`);
-
-            // For completed updates, we could resolve the request early if desired
-            if (progressData.status === 'completed' && progressData.progress === 100) {
-              // Optionally resolve early with partial data
-              // request.resolve(progressData.payload);
-              // pendingRequests.delete(requestId);
-
-              // Instead, just log the completion, wait for final result from Figma
-              logger.info(`Operation ${progressData.commandType} completed, waiting for final result`);
-            }
+            logger.info(`Progress: ${progressData.commandType}: ${progressData.progress}% - ${progressData.message}`);
           }
           return;
         }
@@ -101,9 +113,7 @@ export function connectToFigma(port: number = defaultPort) {
         // Handle regular responses
         const myResponse = json.message;
         logger.debug(`Received message: ${JSON.stringify(myResponse)}`);
-        logger.log('myResponse' + JSON.stringify(myResponse));
 
-        // Handle response to a request
         if (
           myResponse.id &&
           pendingRequests.has(myResponse.id) &&
@@ -123,7 +133,6 @@ export function connectToFigma(port: number = defaultPort) {
 
           pendingRequests.delete(myResponse.id);
         } else {
-          // Handle broadcast messages or events
           logger.info(`Received broadcast message: ${JSON.stringify(myResponse)}`);
         }
       } catch (error) {
@@ -133,32 +142,138 @@ export function connectToFigma(port: number = defaultPort) {
 
     ws.on('error', (error) => {
       logger.error(`Socket error: ${error}`);
-      // Don't attempt to reconnect here, let the close handler do it
     });
 
     ws.on('close', (code, reason) => {
       clearTimeout(connectionTimeout);
-      logger.info(`Disconnected from Figma socket server with code ${code} and reason: ${reason || 'No reason provided'}`);
+      logger.info(`Disconnected with code ${code}`);
       ws = null;
 
       // Reject all pending requests
       for (const [id, request] of pendingRequests.entries()) {
         clearTimeout(request.timeout);
-        request.reject(new Error(`Connection closed with code ${code}: ${reason || 'No reason provided'}`));
+        request.reject(new Error(`Connection closed`));
         pendingRequests.delete(id);
       }
 
-      // Attempt to reconnect with exponential backoff
-      const backoff = Math.min(30000, reconnectInterval * Math.pow(1.5, Math.floor(Math.random() * 5))); // Max 30s
+      // Attempt to reconnect
+      const backoff = Math.min(30000, reconnectInterval * Math.pow(1.5, Math.floor(Math.random() * 5)));
       logger.info(`Attempting to reconnect in ${backoff/1000} seconds...`);
       setTimeout(() => connectToFigma(port), backoff);
     });
-    
+
   } catch (error) {
     logger.error(`Failed to create WebSocket connection: ${error instanceof Error ? error.message : String(error)}`);
-    // Attempt to reconnect after a delay
     setTimeout(() => connectToFigma(port), reconnectInterval);
   }
+}
+
+/**
+ * Try to auto-connect to an available channel
+ */
+async function tryAutoConnect(): Promise<void> {
+  const channels = getActiveChannels();
+
+  if (channels.length === 0) {
+    logger.info("No Figma plugins connected yet. Waiting for connection...");
+    return;
+  }
+
+  if (channels.length === 1 && !currentChannel) {
+    logger.info(`Auto-connecting to channel: ${channels[0]}`);
+    try {
+      await joinChannel(channels[0]);
+    } catch (error) {
+      logger.error(`Auto-connect failed: ${error}`);
+    }
+  } else if (channels.length > 1) {
+    logger.info(`Multiple channels available: ${channels.join(", ")}. Use join_channel to select one.`);
+  }
+}
+
+/**
+ * Auto-connect to Figma - finds and connects to available channel
+ */
+export async function autoConnect(): Promise<{ success: boolean; channel?: string; message: string; availableChannels?: string[] }> {
+  const channels = getActiveChannels();
+
+  if (channels.length === 0) {
+    return {
+      success: false,
+      message: "No Figma plugins connected. Please run the Figma plugin first."
+    };
+  }
+
+  if (currentChannel) {
+    return {
+      success: true,
+      channel: currentChannel,
+      message: `Already connected to channel: ${currentChannel}`
+    };
+  }
+
+  if (channels.length === 1) {
+    try {
+      await joinChannel(channels[0]);
+      return {
+        success: true,
+        channel: channels[0],
+        message: `Connected to channel: ${channels[0]}`
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Failed to connect: ${error instanceof Error ? error.message : String(error)}`
+      };
+    }
+  }
+
+  // Multiple channels available
+  return {
+    success: false,
+    message: `Multiple channels available. Please use join_channel with one of: ${channels.join(", ")}`,
+    availableChannels: channels
+  };
+}
+
+/**
+ * Disconnect from current channel
+ */
+export function disconnect(): { success: boolean; message: string } {
+  if (!currentChannel) {
+    return {
+      success: false,
+      message: "Not connected to any channel"
+    };
+  }
+
+  const previousChannel = currentChannel;
+  currentChannel = null;
+  setServerCurrentChannel(null);
+
+  return {
+    success: true,
+    message: `Disconnected from channel: ${previousChannel}`
+  };
+}
+
+/**
+ * Get connection status
+ */
+export function getConnectionStatus(): {
+  serverRunning: boolean;
+  connected: boolean;
+  currentChannel: string | null;
+  availableChannels: string[];
+  stats: any;
+} {
+  return {
+    serverRunning: isServerRunning(),
+    connected: currentChannel !== null,
+    currentChannel,
+    availableChannels: getActiveChannels(),
+    stats: getServerStats()
+  };
 }
 
 /**
@@ -168,12 +283,13 @@ export function connectToFigma(port: number = defaultPort) {
  */
 export async function joinChannel(channelName: string): Promise<void> {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    throw new Error("Not connected to Figma");
+    throw new Error("Not connected to WebSocket server");
   }
 
   try {
     await sendCommandToFigma("join", { channel: channelName });
     currentChannel = channelName;
+    setServerCurrentChannel(channelName);
     logger.info(`Joined channel: ${channelName}`);
   } catch (error) {
     logger.error(`Failed to join channel: ${error instanceof Error ? error.message : String(error)}`);
@@ -187,6 +303,14 @@ export async function joinChannel(channelName: string): Promise<void> {
  */
 export function getCurrentChannel(): string | null {
   return currentChannel;
+}
+
+/**
+ * Enable or disable auto-connect feature
+ */
+export function setAutoConnect(enabled: boolean): void {
+  autoConnectEnabled = enabled;
+  logger.info(`Auto-connect ${enabled ? 'enabled' : 'disabled'}`);
 }
 
 /**
@@ -205,14 +329,14 @@ export function sendCommandToFigma(
     // If not connected, try to connect first
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       connectToFigma();
-      reject(new Error("Not connected to Figma. Attempting to connect..."));
+      reject(new Error("Not connected to WebSocket server. Attempting to connect..."));
       return;
     }
 
     // Check if we need a channel for this command
     const requiresChannel = command !== "join";
     if (requiresChannel && !currentChannel) {
-      reject(new Error("Must join a channel before sending commands"));
+      reject(new Error("Must join a channel before sending commands. Use auto_connect or join_channel."));
       return;
     }
 
@@ -228,7 +352,7 @@ export function sendCommandToFigma(
         command,
         params: {
           ...(params as any),
-          commandId: id, // Include the command ID in params
+          commandId: id,
         },
       },
     };
@@ -237,12 +361,12 @@ export function sendCommandToFigma(
     const timeout = setTimeout(() => {
       if (pendingRequests.has(id)) {
         pendingRequests.delete(id);
-        logger.error(`Request ${id} to Figma timed out after ${timeoutMs / 1000} seconds`);
+        logger.error(`Request ${id} timed out after ${timeoutMs / 1000} seconds`);
         reject(new Error('Request to Figma timed out'));
       }
     }, timeoutMs);
 
-    // Store the promise callbacks to resolve/reject later
+    // Store the promise callbacks
     pendingRequests.set(id, {
       resolve,
       reject,
@@ -251,7 +375,7 @@ export function sendCommandToFigma(
     });
 
     // Send the request
-    logger.info(`Sending command to Figma: ${command}`);
+    logger.info(`Sending command: ${command}`);
     logger.debug(`Request details: ${JSON.stringify(request)}`);
     ws.send(JSON.stringify(request));
   });
